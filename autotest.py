@@ -69,6 +69,15 @@ def tool_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def day_from_repo_url(repo_url: str) -> str:
+    # День = первые три символа имени репозитория.
+    #   .../D08T05_ID_1577486-1.git -> D08T05_ID_1577486-1 -> D08
+    name = repo_url.rstrip("/").rsplit("/", 1)[-1]
+    if name.endswith(".git"):
+        name = name[:-len(".git")]
+    return name[:3]
+
+
 def run_cmd(cmd, cwd=None, input_data=None, timeout=None):
     try:
         result = subprocess.run(
@@ -218,6 +227,26 @@ def scan_sources(project_dir: Path, scan_dir: str, recursive: bool):
 
     sources.sort()
     return sources
+
+
+def parse_selection(value: str):
+    # "det, invert , sort" -> {"det", "invert", "sort"}
+    if not value:
+        return set()
+    return {item.strip() for item in value.split(",") if item.strip()}
+
+
+def filter_sources(sources, only, skip):
+    # Отбор по имени файла без расширения (stem), совпадает с папкой тестов.
+    result = sources
+
+    if only:
+        result = [s for s in result if Path(s).stem in only]
+
+    if skip:
+        result = [s for s in result if Path(s).stem not in skip]
+
+    return result
 
 
 def print_found_sources(sources):
@@ -654,6 +683,24 @@ def main():
     )
 
     parser.add_argument(
+        "--only",
+        default=None,
+        help=(
+            "comma-separated list of quests to check, by file stem, "
+            "e.g. --only det,invert. Others are skipped"
+        ),
+    )
+
+    parser.add_argument(
+        "--skip",
+        default=None,
+        help=(
+            "comma-separated list of quests to skip, by file stem, "
+            "e.g. --skip picture,sort"
+        ),
+    )
+
+    parser.add_argument(
         "--test-map",
         choices=["stem", "relative", "prefix", "prefix-nested"],
         default="stem",
@@ -697,7 +744,11 @@ def main():
     else:
         tests_root = Path(args.tests_root).resolve()
 
-
+    # День берётся из имени репозитория (первые три символа).
+    # Папка дня добавляется в путь к тестам: tests/<day>/<stem>
+    day = day_from_repo_url(args.repo)
+    tests_root = tests_root / day
+    print(f"Day: {day}")
 
     if not tests_root.exists():
         print(f"Tests directory not found: {tests_root}")
@@ -732,10 +783,25 @@ def main():
             recursive=args.recursive,
         )
 
+        only = parse_selection(args.only)
+        skip = parse_selection(args.skip)
+
+        if only or skip:
+            available = {Path(s).stem for s in sources}
+            unknown = (only | skip) - available
+            if unknown:
+                print()
+                print("Warning: selection names not found among sources:")
+                for name in sorted(unknown):
+                    print(f"  - {name}")
+
+            sources = filter_sources(sources, only, skip)
+
         print_found_sources(sources)
 
         if not sources:
             print()
+            print("No source files to check after selection")
             print("FINAL VERDICT: FAIL")
             sys.exit(1)
 
